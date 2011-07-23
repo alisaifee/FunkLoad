@@ -138,8 +138,9 @@ class SSHDistributor(DistributorBase):
         """
         obj = self.threaded_execute(cmd_string, shell_interpreter, cwdir)
         obj.join()
-        return obj.output.read(), obj.err.read()
-
+        out,err = obj.output.read(), obj.err.read()
+        return out,err
+    
     @requiresconnection
     def threaded_execute(self, cmd_string, shell_interpreter="bash -c",
                                                                 cwdir=None):
@@ -365,7 +366,7 @@ class DistributionMgr(threading.Thread):
                 self.remote_res_dir, self.tarred_testsdir)
 
             if worker.isdir(virtual_env):
-                worker.execute("rmdir -rf %s" % virtual_env)
+                worker.execute("rm -rf %s" % virtual_env)
 
             worker.execute("mkdir -p %s" % virtual_env)
             worker.put(
@@ -382,7 +383,7 @@ class DistributionMgr(threading.Thread):
             remote_tarball = os.path.join(self.remote_res_dir, tarball)
 
             # setup funkload
-            cmd = "./bin/easy_install setuptools ez_setup {funkload}"
+            cmd = "./bin/easy_install setuptools ez_setup %s" % self.funkload_location
 
             if self.distributed_packages:
                 cmd += " %s" % self.distributed_packages
@@ -467,9 +468,12 @@ class DistributionMgr(threading.Thread):
 
         self.stopMonitors()
         self.logr_close()
+        
+        self.final_collect()
 
         self.stopMonitors()
-        self.correlate_statistics()
+        if self.monitor_hosts:
+            self.correlate_statistics()
 
     def final_collect(self):
         expr = re.compile("Log\s+xml:\s+(.*?)\n")
@@ -584,6 +588,10 @@ class DistributionMgr(threading.Thread):
 
         return times
 
+    def logr_close(self):
+        """Stop logging tag."""
+        self.test._close_result_log()
+    
     def correlate_statistics(self):
         result_path = None
         for worker, results in self._worker_results.items():
