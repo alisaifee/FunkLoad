@@ -24,7 +24,7 @@
 import ez_setup
 ez_setup.use_setuptools()
 from setuptools import setup, find_packages
-__version__ = '1.16.1'
+__version__ = '1.17.0'
 
 setup(
     name="funkload",
@@ -34,7 +34,7 @@ setup(
     author="Benoit Delbosc",
     author_email="bdelbosc@nuxeo.com",
     url="http://funkload.nuxeo.org/",
-    download_url="http://funkload.nuxeo.org/funkload-%s.tar.gz" % __version__,
+    download_url="http://pypi.python.org/packages/source/f/funkload/funkload-%s.tar.gz" % __version__,
     license='GPL',
     keywords='testing benching load performance functional monitoring',
     packages=find_packages('src'),

@@ -29,7 +29,6 @@ from socket import error as SocketError
 from xmlrpclib import ServerProxy
 import pkg_resources
 import tarfile
-import shutil
 import tempfile
 
 
@@ -330,8 +329,12 @@ def package_tests(module_file):
     exclude_func = lambda filename: filename.find(".log")>=0 or\
                                     filename.find(".bak")>=0 or\
                                     filename.find(".pyc")>=0 or\
+                                    filename.find(".gplot")>=0 or\
+                                    filename.find(".png")>=0 or\
+                                    filename.find(".data")>=0 or\
+                                    filename.find(".xml")>=0 or\
                                     os.path.split(filename)[1] == "bin" or\
-                                    os.path.split(filename)[1] == "lib" 
+                                    os.path.split(filename)[1] == "lib"
         
     _path = tempfile.mktemp(suffix='.tar') 
     import hashlib
@@ -346,8 +349,8 @@ def extract_token(text, tag_start, tag_end):
     """Extract a token from text, using the first occurence of
     tag_start and ending with tag_end. Return None if tags are not
     found."""
-    start = text.find(tag_start) + len(tag_start)
-    end = text.find(tag_end, start)
+    start = text.find(tag_start)
+    end = text.find(tag_end, start + len(tag_start))
     if start < 0 or end < 0:
         return None
-    return text[start:end]
+    return text[start + len(tag_start):end]

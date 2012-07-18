@@ -168,6 +168,7 @@ def WTC_log(self, message, content):
     pass
 WebTestCase.log = WTC_log
 
+
 # use fl img sucker
 def WTC_pageImages(self, url, page, testcase=None):
     '''Given the HTML page that was loaded from url, grab all the images.
@@ -181,7 +182,7 @@ WebTestCase.pageImages = WTC_pageImages
 
 # WebFetcher fetch
 def WF_fetch(self, url, postdata=None, server=None, port=None, protocol=None,
-             ok_codes=None, key_file=None, cert_file=None, method="GET"):
+             ok_codes=None, key_file=None, cert_file=None, method="GET", consumer=None):
     '''Run a single test request to the indicated url. Use the POST data
     if supplied. Accepts key and certificate file paths for https (ssl/tls)
     connections.
@@ -323,7 +324,7 @@ def WF_fetch(self, url, postdata=None, server=None, port=None, protocol=None,
     cookie_list = []
     for domain, cookies in self.cookies.items():
         # check cookie domain
-        if not server.endswith(domain):
+        if not server.endswith(domain) and domain[1:] != server:
             continue
         for path, cookies in cookies.items():
             # check that the path matches
@@ -390,10 +391,21 @@ def WF_fetch(self, url, postdata=None, server=None, port=None, protocol=None,
         else:
             f = h.getfile()
             g = cStringIO.StringIO()
-            d = f.read()
+            if consumer is None:
+                d = f.read()
+            else:
+                d = f.readline(1)
             while d:
                 g.write(d)
-                d = f.read()
+                if consumer is None:
+                    d = f.read()
+                else:
+                    ret = consumer(d)
+                    if ret == 0:
+                        # consumer close connection
+                        d = None
+                    else:
+                        d = f.readline(1)
             response = HTTPResponse(self.cookies, protocol, server, port, url,
                                     errcode, errmsg, headers, g.getvalue(),
                                     self.error_content)

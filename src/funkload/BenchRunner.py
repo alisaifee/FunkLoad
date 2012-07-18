@@ -53,6 +53,7 @@ See http://funkload.nuxeo.org/ for more information.
 Examples
 ========
   %prog myFile.py MyTestCase.testSomething
+  %prog my_module MyTestCase.testSomething
                         Bench MyTestCase.testSomething using MyTestCase.conf.
   %prog -u http://localhost:8080 -c 10:20 -D 30 myFile.py \\
       MyTestCase.testSomething
@@ -121,9 +122,18 @@ def reset_cycle_results():
     g_success = g_failures = g_errors = 0
 
 
+def load_module(test_module):
+    module = __import__(test_module)
+    parts = test_module.split('.')[1:]
+    while parts:
+        part = parts.pop()
+        module = getattr(module, part)
+    return module
+
+
 def load_unittest(test_module, test_class, test_name, options):
     """instantiate a unittest."""
-    module = __import__(test_module)
+    module = load_module(test_module)
     klass = getattr(module, test_class)
     return klass(test_name, options)
 
@@ -210,8 +220,8 @@ class LoopTestRunner(threading.Thread):
 class BenchRunner:
     """Run a unit test in bench mode."""
 
-    def __init__(self, module_file, class_name, method_name, options):
-        self.module_name = os.path.basename(os.path.splitext(module_file)[0])
+    def __init__(self, module_name, class_name, method_name, options):
+        self.module_name = module_name
         self.class_name = class_name
         self.method_name = method_name
         self.options = options
@@ -243,9 +253,10 @@ class BenchRunner:
         if not options.is_distributed:
             hosts = test.conf_get('monitor', 'hosts', '', quiet=True).split()
             for host in hosts:
-                host = host.strip()
-                monitor_hosts.append((host, test.conf_getInt(host, 'port'),
-                                      test.conf_get(host, 'description', '')))
+                name = host
+                host = test.conf_get(host,'host',host.strip())
+                monitor_hosts.append((name, host, test.conf_getInt(name, 'port'),
+                                      test.conf_get(name, 'description', '')))
         self.monitor_hosts = monitor_hosts
         # keep the test to use the result logger for monitoring
         # and call setUp/tearDown Cycle
@@ -458,25 +469,25 @@ class BenchRunner:
         if not self.monitor_hosts:
             return
         monitor_hosts = []
-        for (host, port, desc) in self.monitor_hosts:
-            trace("* Getting monitoring config from %s: ..." % host)
+        for (name, host, port, desc) in self.monitor_hosts:
+            trace("* Getting monitoring config from %s: ..." % name)
             server = ServerProxy("http://%s:%s" % (host, port))
             try:
                 config = server.getMonitorsConfig()
                 data = []
                 for key in config.keys():
                     xml = '<monitorconfig host="%s" key="%s" value="%s" />' % (
-                                                        host, key, config[key])
+                                                        name, key, config[key])
                     data.append(xml)
                 self.logr("\n".join(data))
             except Fault:
                 trace(' not supported.\n')
-                monitor_hosts.append((host, port, desc))
+                monitor_hosts.append((name, host, port, desc))
             except SocketError:
                 trace(' failed, server is down.\n')
             else:
                 trace(' done.\n')
-                monitor_hosts.append((host, port, desc))
+                monitor_hosts.append((name, host, port, desc))
         self.monitor_hosts = monitor_hosts
 
     def startMonitors(self, monitor_key):
@@ -484,8 +495,8 @@ class BenchRunner:
         if not self.monitor_hosts:
             return
         monitor_hosts = []
-        for (host, port, desc) in self.monitor_hosts:
-            trace("* Start monitoring %s: ..." % host)
+        for (name, host, port, desc) in self.monitor_hosts:
+            trace("* Start monitoring %s: ..." % name)
             server = ServerProxy("http://%s:%s" % (host, port))
             try:
                 server.startRecord(monitor_key)
@@ -493,15 +504,15 @@ class BenchRunner:
                 trace(' failed, server is down.\n')
             else:
                 trace(' done.\n')
-                monitor_hosts.append((host, port, desc))
+                monitor_hosts.append((name, host, port, desc))
         self.monitor_hosts = monitor_hosts
 
     def stopMonitors(self, monitor_key):
         """Stop monitoring and save xml result."""
         if not self.monitor_hosts:
             return
-        for (host, port, desc) in self.monitor_hosts:
-            trace('* Stop monitoring %s: ' % host)
+        for (name, host, port, desc) in self.monitor_hosts:
+            trace('* Stop monitoring %s: ' % name)
             server = ServerProxy("http://%s:%s" % (host, port))
             try:
                 server.stopRecord(monitor_key)
@@ -540,13 +551,14 @@ class BenchRunner:
         if self.options.label:
             config['label'] = self.options.label
 
-        for (host, port, desc) in self.monitor_hosts:
-            config[host] = desc
+        for (name, host, port, desc) in self.monitor_hosts:
+            config[name] = desc
         self.test._open_result_log(**config)
 
     def logr_close(self):
         """Stop logging tag."""
         self.test._close_result_log()
+        self.test.logger_result.handlers = []
 
     def __repr__(self):
         """Display bench information."""
@@ -573,7 +585,7 @@ class BenchRunner:
         return '\n'.join(text)
 
 
-def main():
+def main(args=sys.argv[1:]):
     """Default main."""
     # enable to load module in the current path
     cur_path = os.path.abspath(os.path.curdir)
@@ -581,6 +593,11 @@ def main():
 
     parser = OptionParser(USAGE, formatter=TitledHelpFormatter(),
                           version="FunkLoad %s" % get_version())
+    parser.add_option("", "--config",
+                      type="string",
+                      dest="config",
+                      metavar='CONFIG',
+                      help="Path to alternative config file")
     parser.add_option("-u", "--url",
                       type="string",
                       dest="main_url",
@@ -588,9 +605,9 @@ def main():
     parser.add_option("-c", "--cycles",
                       type="string",
                       dest="bench_cycles",
-                      help="Cycles to bench, this is a list of number of "
-                           "virtual concurrent users, to run a bench with 3"
-                           "cycles with 5, 10 and 20 users use: -c 2:10:20")
+                      help="Cycles to bench, colon-separated list of "
+                           "virtual concurrent users. To run a bench with 3 "
+                           "cycles of 5, 10 and 20 users, use: -c 5:10:20")
     parser.add_option("-D", "--duration",
                       type="string",
                       dest="bench_duration",
@@ -676,10 +693,11 @@ def main():
                            "on remote machines when being run in distributed "
                            "mode.")
 
-    options, args = parser.parse_args()
     # XXX What exactly is this checking for here??
-    cmd_args = " ".join([k for k in sys.argv[1:]
+    cmd_args = " ".join([k for k in args
                            if k.find('--distribute') < 0])
+
+    options, args = parser.parse_args(args)
 
     if len(args) != 2:
         parser.error("incorrect number of arguments")
@@ -692,13 +710,20 @@ def main():
         options.bench_sleep_time_max = '0'
         options.bench_sleep_time = '0'
 
+    if os.path.exists(args[0]):
+        # We were passed a file for the first argument
+        module_name = os.path.basename(os.path.splitext(args[0])[0])
+    else:
+        # We were passed a module name
+        module_name = args[0]
+
     klass, method = args[1].split('.')
     if options.distribute:
         from Distributed import DistributionMgr
         ret = None
         try:
             distmgr = DistributionMgr(
-                args[0], klass, method, options, cmd_args)
+                module_name, klass, method, options, cmd_args)
         except UserWarning, error:
             trace(red_str("Distribution failed with:%s \n" % (error)))
 
@@ -710,12 +735,12 @@ def main():
             trace("* ^C received *")
             distmgr.abort()
 
-        sys.exit(ret)
+        return ret
     else:
-        bench = BenchRunner(args[0], klass, method, options)
+        bench = BenchRunner(module_name, klass, method, options)
 
         # Start a HTTP server optionally
-        if options.debugserver == True:
+        if options.debugserver:
             http_server_thread = FunkLoadHTTPServer(bench, options.debugport)
             http_server_thread.start()
 
@@ -724,7 +749,8 @@ def main():
             ret = bench.run()
         except KeyboardInterrupt:
             trace("* ^C received *")
-        sys.exit(ret)
+        return ret
 
 if __name__ == '__main__':
-    main()
+    ret = main()
+    sys.exit(ret)

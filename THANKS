@@ -32,3 +32,10 @@ Bertrand Yvain: Patch on null content-lengh, fix on network monitoring charts.
 Krzysztof A. Adamski: Plugin monitors framework.
 Andrew McFague: Specify a custom Python binary configuration option for 
   distributed nodes, pep8 fixes for the funkload.Distributed module.
+Thibault Soulcié: logo.
+Benito Jorge Bastida: Misc bug fixes.
+Joe Shaw: Allow fl-run-bench to take modules in addition to filenames.
+Juha Mustonen: Adding a --config option.
+Dylan Jay: multiple bencher and monitor per server support
+Seong-Kook Shin: Additional RPS chart where X axis represents the time in 
+  seconds

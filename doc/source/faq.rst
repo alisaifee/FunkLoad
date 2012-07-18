@@ -1,11 +1,11 @@
 FAQ
 ====
 
-What does all these dots mean ?
+What do all these dots mean ?
 -------------------------------
 
-During a bench cycle the "Starting threads" dots means the number
-running threads::
+During a bench cycle each "Starting threads" dots represents a
+running thread::
 
   Cycle #1 with 10 virtual users
   ------------------------------
@@ -14,13 +14,13 @@ running threads::
   * Current time: 2011-01-26T23:23:06.234422
   * Starting threads: ........
 
-During the cycle logging the green dots means a successful test while
-the red 'F' are for test failure::
+During the cycle logging each green dot means a successful test while
+each red 'F' is for a test failure::
 
   * Logging for 10s (until 2011-01-26T23:23:16.360602): ......F......
 
 
-During the stagging down the dots are the number of stopped threads::
+During the stagging down each dot represents a stopped thread::
 
   * Waiting end of threads: .........
 
@@ -44,6 +44,33 @@ How to accept invalid Cookies ?
       #  raise Error, 'Cookie domain "%s" doesn\'t match '
       #  'request host "%s"'%(domain, server)
 
+
+How to share a counter between concurrent users ?
+--------------------------------------------------
+
+The credential server can serve a sequence. Using ``xmlrpc_get_seq``
+threads can share a sequence::
+
+    from funkload.utils import xmlrpc_get_seq
+    ...
+    seq = xmlrpc_get_seq()
+
+
+
+How to set a timeout on request ?
+-----------------------------------
+
+FunkLoad uses (a patched) webunit, which uses httplib for the actual
+requests. It does not explicitly set a timeout, so httplib uses the
+global default from socket. By default, the global default is None,
+meaning "wait forever". Setting it to a value will cause HTTP requests
+made by FunkLoad to time out if the server does not respond in time.
+::
+
+  import socket
+  socket.setdefaulttimeout(SECONDS)
+
+where SECONDS is, of course, your preferred timeout in seconds.
 
 How to submit high load ?
 ----------------------------
@@ -73,11 +100,11 @@ is a work around to use the full server power.
 Use multiple machine to perform the load, see the next section.
 
 
-How to run multiple bencher ?
+How to run multiple benchers ?
 -------------------------------
 
 Bench result file can be merged by the ``fl-build-report`` command,
-but how to run multiple bencher ?
+but how do you run multiple benchers ?
 
 There are many ways: 
 
@@ -140,8 +167,44 @@ There are many ways:
 
      [distribute]
      log_path = log-distributed
-     funkload_location=http://pypi.python.org/packages/source/f/funkload/funkload-1.14.0.tar.gz
+     funkload_location=http://pypi.python.org/packages/source/f/funkload/funkload-1.16.1.tar.gz
 
+  You can multiple benchers per server by defining many workers with the same host
+  name in your configuration file. Add a workers section to your configuration file::
+
+      [workers]
+      hosts = host1cpu1 host1cpu2 host2cpu1 host2cpu2
+
+  And then define these workers::
+
+      [host1cpu1]
+      host = host1
+      username = user
+      password = password
+
+      [host1cpu2]
+      host = host2
+      username = user
+      password = password
+
+      [host2cpu1]
+      host = host2
+      username = user
+      password = password
+
+      [host2cpu2]
+      host = host2
+      username = user
+      password = password
+
+  Then run adding just the --distribute option::
+
+      $ fl-run-bench -c 1:2:3 -D 5 -f --simple-fetch  test_Simple.py Simple.test_simple --distribute -u http://target/
+
+  If your node uses a non standard ssh port (for instance you are using ssh tunneling) you can use::
+
+      [host1]
+      host = host1:port
 
 * Using BenchMaster http://pypi.python.org/pypi/benchmaster
 
@@ -158,7 +221,15 @@ There are many ways:
    # get the results 
    parallel-slurp -h hosts.txt -o out -L results-date -u ‘+%Y%m%d-%H%M%S’ -r /tmp/ftests/report .
    # build the report with fl-build-report, it supports the results merging
- 
+
+
+How to accept gzip content encoding ?
+---------------------------------------
+
+You just need to add the appropriate header::
+
+     self.setHeader('Accept-encoding', 'gzip')
+
 
 How to mix different scenarii in a bench ?
 -------------------------------------------
@@ -222,15 +293,15 @@ Here is a sample Makefile
     LOG_HOME := ./log
     
     ifdef URL
-    	FLOPS = -u $(URL) $(EXT)
+        FLOPS = -u $(URL) $(EXT)
     else
-    	FLOPS = $(EXT)
+        FLOPS = $(EXT)
     endif
     
     ifdef REPORT_HOME
-    	REPORT = $(REPORT_HOME)
+        REPORT = $(REPORT_HOME)
     else
-    	REPORT = report
+        REPORT = report
     endif
     
     all: test
@@ -240,23 +311,23 @@ Here is a sample Makefile
     bench: start bench-app stop
     
     start:
-    	-mkdir -p $(REPORT) $(LOG_HOME)
-    	-$(MONCTL) restart
-    	-$(CREDCTL) restart
+        -mkdir -p $(REPORT) $(LOG_HOME)
+        -$(MONCTL) restart
+        -$(CREDCTL) restart
     
     stop:
-    	-$(MONCTL) stop
-    	-$(CREDCTL) stop
+        -$(MONCTL) stop
+        -$(CREDCTL) stop
     
     test-app:
-    	fl-run-test -d --debug-level=3 --simple-fetch test_app.py App.test_app $(FLOPS)
+        fl-run-test -d --debug-level=3 --simple-fetch test_app.py App.test_app $(FLOPS)
     
     bench-app:
-    	-fl-run-bench --simple-fetch test_app.py App.test_app -c 1:5:10:15:20:30:40:50 -D 45 -m 0.1 -M .5 -s 1 $(FLOPS)
-    	-fl-build-report $(LOG_HOME)/app-bench.xml --html -o $(REPORT)
+        -fl-run-bench --simple-fetch test_app.py App.test_app -c 1:5:10:15:20:30:40:50 -D 45 -m 0.1 -M .5 -s 1 $(FLOPS)
+        -fl-build-report $(LOG_HOME)/app-bench.xml --html -o $(REPORT)
     
     clean:
-    	-find . "(" -name "*~" -or  -name ".#*" -or  -name "*.pyc" ")" -print0 | xargs -0 rm -f
+        -find . "(" -name "*~" -or  -name ".#*" -or  -name "*.pyc" ")" -print0 | xargs -0 rm -f
 
 
 It can be used like this::

@@ -26,8 +26,6 @@ from datetime import datetime
 from socket import error as SocketError
 from stat import S_ISREG, S_ISDIR
 from glob import glob
-from socket import error as SocketError
-from stat import S_ISREG, S_ISDIR
 from xml.etree.ElementTree import ElementTree
 from xmlrpclib import ServerProxy
 
@@ -37,9 +35,18 @@ from utils import mmn_encode, trace, package_tests, get_virtualenv_script, \
                   get_version
 
 
+def load_module(test_module):
+    module = __import__(test_module)
+    parts = test_module.split('.')[1:]
+    while parts:
+        part = parts.pop()
+        module = getattr(module, part)
+    return module
+
+
 def load_unittest(test_module, test_class, test_name, options):
     """instantiate a unittest."""
-    module = __import__(test_module)
+    module = load_module(test_module)
     klass = getattr(module, test_class)
     return klass(test_name, options)
 
@@ -79,7 +86,7 @@ class SSHDistributor(DistributorBase):
     used by :class:`~DistributionMgr`.
 
     """
-    def __init__(self, host, username=None, password=None):
+    def __init__(self, name, host, username=None, password=None):
         """
         performs authentication and tries to connect to the
         `host`.
@@ -90,13 +97,20 @@ class SSHDistributor(DistributorBase):
         self.connection.load_system_host_keys()
         self.connection.set_missing_host_key_policy(paramiko.WarningPolicy())
         self.error = ""
+        self.name = name #So we can have multiples tests per host
         credentials = {}
         if username and password:
             credentials = {"username": username, "password": password}
         elif username:
             credentials = {"username": username}
+        host_port = host.split(':')
+        if len(host_port) > 1:
+            host = host_port[0]
+            port = int(host_port[1])
+        else:
+            port = 22
         try:
-            self.connection.connect(host, timeout=5, **credentials)
+            self.connection.connect(host, timeout=5, port=port, **credentials)
             self.connected = True
         except socket.gaierror, error:
             self.error = error
@@ -138,9 +152,20 @@ class SSHDistributor(DistributorBase):
         """
         obj = self.threaded_execute(cmd_string, shell_interpreter, cwdir)
         obj.join()
-        out,err = obj.output.read(), obj.err.read()
-        return out,err
-    
+        out = ""
+        err = ""
+        while True:
+            e = obj.err.read(1)
+            err += e
+            #trace(e)
+            o = obj.output.read(1)
+            out += o
+            #trace(o)
+            if not o and not e:
+                break
+
+        return out, err
+
     @requiresconnection
     def threaded_execute(self, cmd_string, shell_interpreter="bash -c",
                                                                 cwdir=None):
@@ -165,8 +190,19 @@ class SSHDistributor(DistributorBase):
                     self_.shell_interpreter, self_.cmd_string)
                 if self_.cwdir:
                     exec_str += "; popd;"
+                #trace("DEBUG: %s\n" %exec_str)
                 self_.input, self_.output, self_.err = \
-                    self.connection.exec_command(exec_str)
+                    self_.exec_command(self.connection, exec_str, bufsize=1, timeout=250)
+
+            def exec_command(self, connection, command, bufsize=-1, timeout=None):
+                # Override to set timeout properly see http://mohangk.org/blog/2011/07/paramiko-sshclient-exec_command-timeout-workaround/
+                chan = connection._transport.open_session()
+                chan.settimeout(timeout)
+                chan.exec_command(command)
+                stdin = chan.makefile('wb', bufsize)
+                stdout = chan.makefile('rb', bufsize)
+                stderr = chan.makefile_stderr('rb', bufsize)
+                return stdin, stdout, stderr
 
         th_obj = ThreadedExec(cmd_string, shell_interpreter, cwdir)
         th_obj.start()
@@ -210,21 +246,24 @@ class DistributionMgr(threading.Thread):
     Interface for use by :mod:`funkload.TestRunner` to distribute
     the bench over multiple machines.
     """
-    def __init__(self, module_file, class_name, method_name, options,
+    def __init__(self, module_name, class_name, method_name, options,
                                                                 cmd_args):
         """
         mirrors the initialization of :class:`funkload.BenchRunner.BenchRunner`
         """
         # store the args. these can be passed to BenchRunner later.
-        self.module_file = module_file
+        self.module_name = module_name
         self.class_name = class_name
         self.method_name = method_name
         self.options = options
         self.cmd_args = cmd_args
 
         self.cmd_args += " --is-distributed"
-        self.module_name = os.path.basename(os.path.splitext(module_file)[0])
+
+        module = load_module(module_name)
+        module_file = module.__file__
         self.tarred_tests, self.tarred_testsdir = package_tests(module_file)
+
         self.remote_res_dir = "/tmp/funkload-bench-sandbox/"
 
         test = load_unittest(self.module_name, class_name,
@@ -296,6 +335,7 @@ class DistributionMgr(threading.Thread):
                         uname, pwd = uname_pwd
 
                 workers.append({
+                    "name": host,
                     "host": host,
                     "password": pwd,
                     "username": uname})
@@ -304,7 +344,8 @@ class DistributionMgr(threading.Thread):
             for host in hosts:
                 host = host.strip()
                 workers.append({
-                    "host": host,
+                    "name": host,
+                    "host": test.conf_get(host, "host",host),
                     "password": test.conf_get(host, 'password', ''),
                     "username": test.conf_get(host, 'username', '')})
 
@@ -318,9 +359,10 @@ class DistributionMgr(threading.Thread):
         if not options.is_distributed:
             hosts = test.conf_get('monitor', 'hosts', '', quiet=True).split()
             for host in sorted(hosts):
-                host = host.strip()
-                monitor_hosts.append((host, test.conf_getInt(host, 'port'),
-                                      test.conf_get(host, 'description', '')))
+                name = host
+                host = test.conf_get(host,'host',host.strip())
+                monitor_hosts.append((name, host, test.conf_getInt(name, 'port'),
+                                      test.conf_get(name, 'description', '')))
         self.monitor_hosts = monitor_hosts
         # keep the test to use the result logger for monitoring
         # and call setUp/tearDown Cycle
@@ -340,6 +382,8 @@ class DistributionMgr(threading.Thread):
         text.append("* Current time: %s" % datetime.now().isoformat())
         text.append("* Configuration file: %s" % self.config_path)
         text.append("* Distributed output: %s" % self.distribution_output)
+        size = os.path.getsize(self.tarred_tests)
+        text.append("* Tarred tests: %0.2fMB"%(float(size)/10.0**6))
         text.append("* Server: %s" % self.test_url)
         text.append("* Cycles: %s" % self.cycles)
         text.append("* Cycle duration: %ss" % self.duration)
@@ -349,21 +393,23 @@ class DistributionMgr(threading.Thread):
         text.append("* Startup delay between thread: %ss" %
                     self.startup_delay)
         text.append("* Workers :%s\n\n" % ",".join(
-                                                w.host for w in self._workers))
+                                                w.name for w in self._workers))
         return '\n'.join(text)
 
     def prepare_workers(self, allow_errors=False):
         """
-        initialized the sandboxes in each worker node to prepare for a
-        bench run. the additional parameter `allow_errors` essentially
-        will make the distinction between ignoring unresponsive/inappropriate
+        Initialize the sandboxes in each worker node to prepare for a
+        bench run. The additional parameter `allow_errors` will essentially
+        make the distinction between ignoring unresponsive/inappropriate
         nodes - or raising an error and failing the entire bench.
         """
         # right, lets figure out if funkload can be setup on each host
 
         def local_prep_worker(worker):
+
+            remote_res_dir = os.path.join(self.remote_res_dir, worker.name)
             virtual_env = os.path.join(
-                self.remote_res_dir, self.tarred_testsdir)
+                remote_res_dir, self.tarred_testsdir)
 
             if worker.isdir(virtual_env):
                 worker.execute("rm -rf %s" % virtual_env)
@@ -371,19 +417,20 @@ class DistributionMgr(threading.Thread):
             worker.execute("mkdir -p %s" % virtual_env)
             worker.put(
                 get_virtualenv_script(),
-                os.path.join(self.remote_res_dir, "virtualenv.py"))
+                os.path.join(remote_res_dir, "virtualenv.py"))
 
             trace(".")
             worker.execute(
                 "%s virtualenv.py %s" % (
                     self.python_bin, self.tarred_testsdir),
-                cwdir=self.remote_res_dir)
+                cwdir=remote_res_dir)
 
             tarball = os.path.split(self.tarred_tests)[1]
-            remote_tarball = os.path.join(self.remote_res_dir, tarball)
+            remote_tarball = os.path.join(remote_res_dir, tarball)
 
             # setup funkload
-            cmd = "./bin/easy_install setuptools ez_setup %s" % self.funkload_location
+            cmd = "./bin/easy_install setuptools ez_setup {funkload}".format(
+                funkload=self.funkload_location)
 
             if self.distributed_packages:
                 cmd += " %s" % self.distributed_packages
@@ -392,10 +439,10 @@ class DistributionMgr(threading.Thread):
 
             #unpackage tests.
             worker.put(
-                self.tarred_tests, os.path.join(self.remote_res_dir, tarball))
+                self.tarred_tests, os.path.join(remote_res_dir, tarball))
             worker.execute(
                 "tar -xvf %s" % tarball,
-                cwdir=self.remote_res_dir)
+                cwdir=remote_res_dir)
             worker.execute("rm %s" % remote_tarball)
 
         threads = []
@@ -404,13 +451,13 @@ class DistributionMgr(threading.Thread):
             if not worker.connected:
                 if allow_errors:
                     trace("%s is not connected, removing from pool.\n" % \
-                                                                 worker.host)
+                                                                 worker.name)
                     self._workers.remove(worker)
                     continue
                 else:
                     raise RuntimeError(
                         "%s is not contactable with error %s" % (
-                            worker.host, worker.error))
+                            worker.name, worker.error))
 
             # Verify that the Python binary is available
             which_python = "test -x `which %s 2>&1 > /dev/null` && echo true" \
@@ -423,11 +470,11 @@ class DistributionMgr(threading.Thread):
                     args=(worker,)))
             elif allow_errors:
                 trace("Cannot find Python binary at path `%s` on %s, " + \
-                      "removing from pool" % (self.python_bin, worker.host))
+                      "removing from pool" % (self.python_bin, worker.name))
                 self._workers.remove(worker)
             else:
                 raise RuntimeError("%s is not contactable with error %s" % (
-                    worker.host, worker.error))
+                    worker.name, worker.error))
 
         [k.start() for k in threads]
         [k.join() for k in threads]
@@ -447,7 +494,8 @@ class DistributionMgr(threading.Thread):
 
         self.startMonitors()
         for worker in self._workers:
-            venv = os.path.join(self.remote_res_dir, self.tarred_testsdir)
+            remote_res_dir = os.path.join(self.remote_res_dir, worker.name)
+            venv = os.path.join(remote_res_dir, self.tarred_testsdir)
             obj = worker.threaded_execute(
                 'bin/fl-run-bench %s' % self.cmd_args,
                 cwdir=venv)
@@ -459,21 +507,15 @@ class DistributionMgr(threading.Thread):
 
         for thread, worker in zip(threads, self._workers):
             self._worker_results[worker] = thread.output.read()
-            trace("* [%s] returned\n" % worker.host)
+            trace("* [%s] returned\n" % worker.name)
             err_string = thread.err.read()
             if err_string:
-                trace("\n".join("  [%s]: %s" % (worker.host, k) for k \
+                trace("\n".join("  [%s]: %s" % (worker.name, k) for k \
                         in err_string.split("\n") if k.strip()))
             trace("\n")
 
         self.stopMonitors()
-        self.logr_close()
-        
-        self.final_collect()
-
-        self.stopMonitors()
-        if self.monitor_hosts:
-            self.correlate_statistics()
+        self.correlate_statistics()
 
     def final_collect(self):
         expr = re.compile("Log\s+xml:\s+(.*?)\n")
@@ -484,10 +526,10 @@ class DistributionMgr(threading.Thread):
                 filename = os.path.split(remote_file)[1]
                 local_file = os.path.join(
                     self.distribution_output, "%s-%s" % (
-                        worker.host, filename))
+                        worker.name, filename))
                 worker.get(remote_file, local_file)
                 trace("* Received bench log from [%s] into %s\n" % (
-                    worker.host, local_file))
+                    worker.name, local_file))
 
     def startMonitors(self):
         """Start monitoring on hosts list."""
@@ -495,8 +537,8 @@ class DistributionMgr(threading.Thread):
             return
         monitor_hosts = []
         monitor_key = "%s:0:0" % self.method_name
-        for (host, port, desc) in self.monitor_hosts:
-            trace("* Start monitoring %s: ..." % host)
+        for (name, host, port, desc) in self.monitor_hosts:
+            trace("* Start monitoring %s: ..." % name)
             server = ServerProxy("http://%s:%s" % (host, port))
             try:
                 server.startRecord(monitor_key)
@@ -504,7 +546,7 @@ class DistributionMgr(threading.Thread):
                 trace(' failed, server is down.\n')
             else:
                 trace(' done.\n')
-                monitor_hosts.append((host, port, desc))
+                monitor_hosts.append((name, host, port, desc))
         self.monitor_hosts = monitor_hosts
 
     def stopMonitors(self):
@@ -513,7 +555,7 @@ class DistributionMgr(threading.Thread):
             return
         monitor_key = "%s:0:0" % self.method_name
         successful_results = []
-        for (host, port, desc) in self.monitor_hosts:
+        for (name, host, port, desc) in self.monitor_hosts:
             trace('* Stop monitoring %s: ' % host)
             server = ServerProxy("http://%s:%s" % (host, port))
             try:
@@ -548,8 +590,8 @@ class DistributionMgr(threading.Thread):
                   'log_xml': self.result_path,
                   'python_version': platform.python_version()}
 
-        for (host, port, desc) in self.monitor_hosts:
-            config[host] = desc
+        for (name, host, port, desc) in self.monitor_hosts:
+            config[name] = desc
 
         with open(path, "w+") as fd:
             fd.write('<funkload version="{version}" time="{time}">\n'.format(
@@ -594,9 +636,11 @@ class DistributionMgr(threading.Thread):
     
     def correlate_statistics(self):
         result_path = None
+        if not self.monitor_hosts:
+            return
         for worker, results in self._worker_results.items():
             files = glob("%s/%s-*.xml" % (self.distribution_output,
-                                          worker.host))
+                                          worker.name))
             if files:
                 result_path = files[0]
                 break

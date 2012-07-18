@@ -1,6 +1,8 @@
 Links
 =======
 
+* How to stress test your app using Funkload http://tarekziade.wordpress.com/2011/07/27/how-to-stress-test-your-app-using-funkload-part-1/
+
 * How to write funkload test in few minutes http://blog.redturtle.it/redturtle-blog/how-to-write-funkload-test-in-few-minutes
 
 * Fabic + Funkload distributed load http://tarekziade.wordpress.com/2010/12/09/funkload-fabric-quick-and-dirty-distributed-load-system/
@@ -15,3 +17,4 @@ Links
 
 * Apdex with FunkLoad (in french) http://www.wikigento.com/tag/funkload/
 
+* Installing FunkLoad on Mac http://pyfunc.blogspot.com/2011/12/installing-funkload-on-mac.html
